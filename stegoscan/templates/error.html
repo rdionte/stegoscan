@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}Scan failed · StegoScan{% endblock %}
+{% block content %}
+<h1>Scan failed</h1>
+<p class="card error">{{ message }}</p>
+<p><a href="{{ url_for('index') }}">Scan another file</a></p>
+{% endblock %}

@@ -34,6 +34,7 @@ python -m stegoscan scan <file> --json   # machine-readable report
 python -m stegoscan scan <file> --extract out/   # save any extracted payload bytes
 python scripts/make_samples.py           # generate clean + stego test files
 python -m stegoscan.web                  # web UI at http://127.0.0.1:5000
+python -m stegoscan.web --port 5001      # if macOS AirPlay Receiver holds 5000
 pytest -v
 ```
 
@@ -123,5 +124,9 @@ JPEG DCT-domain stego (F5, OutGuess), audio/video stego, live packet capture, an
   - `pcap_records_intact()` catches truncated captures (scapy silently returns a partial record). scapy is imported only when a pcap is scanned
   - Known limits: base domain = last two labels (.co.uk wrong); IPv6 not analyzed; 1-16 byte ping payloads count as non-standard
   - Shared decode/judging logic lives in `decoding.py` (used by text + net)
-- [ ] Web UI
+- [x] Web UI: `web.py` + templates + `tests/test_web.py` done (175 passing total)
+  - Routes: `GET /`, `POST /scan` (HTML), `POST /api/scan` (JSON, no raw bytes). 400 no file/unknown type, 413 over 10 MB, 422 unreadable
+  - Upload saved under `secure_filename` in a `TemporaryDirectory`, deleted after each scan; bit-planes (PNG/BMP only) sent as data: URIs
+  - Hex preview only, no payload download (use CLI `--extract`). CSP + nosniff headers; Jinja auto-escaping covers decoded messages
+  - Host fixed at 127.0.0.1, debug off; `--port` exists because macOS AirPlay listens on 5000
 - [ ] README + portfolio write-up

@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Scan a file</h1>
+<form action="{{ url_for('scan') }}" method="post" enctype="multipart/form-data" class="card">
+  <input type="file" name="file" required>
+  <button type="submit">Scan</button>
+  <p class="hint">Maximum upload: {{ max_upload_mb }} MB</p>
+</form>
+
+<h2>Supported files</h2>
+<ul class="supported">
+  <li><strong>Images</strong> (PNG, BMP, JPEG, GIF): LSB payloads, chi-square and RS estimates, appended data, metadata. JPEG gets appended-data and metadata checks only.</li>
+  <li><strong>Text</strong>: trailing space/tab encodings and zero-width Unicode characters.</li>
+  <li><strong>Packet captures</strong> (.pcap, .pcapng): IP ID, TCP ISN/reserved bits/urgent pointer, TTL, DNS tunneling, ICMP payloads.</li>
+</ul>
+{% endblock %}
