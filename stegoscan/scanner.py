@@ -7,6 +7,7 @@ from pathlib import Path
 
 from stegoscan.image_scan import scan_image
 from stegoscan.report import Report
+from stegoscan.text_scan import scan_text
 
 IMAGE = "image"
 TEXT = "text"
@@ -87,7 +88,7 @@ def scan_file(path: Path) -> Report:
     if file_type == IMAGE:
         return scan_image(path)
     if file_type == TEXT:
-        raise NotImplementedError("Text scanning arrives in Phase 2.")
+        return scan_text(path)
     if file_type == PCAP:
         raise NotImplementedError("Network (pcap) scanning arrives in Phase 3.")
     raise ValueError(f"Unrecognized file type: {path.name}")

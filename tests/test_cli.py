@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from scripts.make_samples import PAYLOAD_MZ, generate_all
+from scripts.make_samples import PAYLOAD_MZ, generate_all, generate_text_samples
 from stegoscan.__main__ import EXIT_CLEAN, EXIT_ERROR, EXIT_FLAGGED, main
 from stegoscan.image_scan import scan_image
 from stegoscan.report import UNREADABLE_CHECK, hex_preview, is_unreadable, report_to_dict
@@ -122,11 +122,29 @@ def test_missing_file(tmp_path, capsys):
     assert "file not found" in capsys.readouterr().err
 
 
-def test_text_not_supported_yet(tmp_path, capsys):
+def test_clean_text_exits_zero(tmp_path, capsys):
     note = tmp_path / "note.txt"
     note.write_text("hello\n")
-    assert main(["scan", str(note)]) == EXIT_ERROR
-    assert "Phase 2" in capsys.readouterr().err
+    assert main(["scan", str(note)]) == EXIT_CLEAN
+    assert "(text)" in capsys.readouterr().out
+
+
+def test_text_payload_extracted_via_cli(tmp_path, capsys):
+    text_dir = tmp_path / "text"
+    generate_text_samples(text_dir)
+    out_dir = tmp_path / "out"
+    code = main(["scan", str(text_dir / "ws_payload.txt"), "--extract", str(out_dir)])
+    assert code == EXIT_FLAGGED
+    (saved,) = out_dir.iterdir()
+    assert saved.read_bytes() == PAYLOAD_MZ
+    assert saved.name == "ws_payload.whitespace_space_0_tab_1.bin"
+
+
+def test_binary_text_file_is_an_error(tmp_path, capsys):
+    blob = tmp_path / "data.txt"
+    blob.write_bytes(b"\x00\x01 not text")
+    assert main(["scan", str(blob)]) == EXIT_ERROR
+    assert "could not analyze" in capsys.readouterr().err
 
 
 def test_pcap_not_supported_yet(tmp_path, capsys):

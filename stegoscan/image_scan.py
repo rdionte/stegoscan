@@ -15,6 +15,7 @@ import numpy as np
 from PIL import Image
 from scipy.stats import chi2
 
+from stegoscan.bits import bits_to_bytes
 from stegoscan.report import UNREADABLE_CHECK, Finding, Report, build_report
 from stegoscan.signatures import find_signatures
 
@@ -63,11 +64,6 @@ def extract_lsb_bits(array: np.ndarray, channel: str, traversal: str) -> np.ndar
     return (selected.reshape(-1) & 1).astype(np.uint8)
 
 
-def _bytes_from_bits(bits: np.ndarray, max_bytes: int) -> bytes:
-    usable_bits = (min(bits.shape[0], max_bytes * 8) // 8) * 8
-    return np.packbits(bits[:usable_bits]).tobytes()
-
-
 def lsb_candidates(image: Image.Image, max_bytes: int = MAX_LSB_BYTES) -> dict[str, bytes]:
     """Try every (channel, traversal) combo. For each, return the raw LSB bytes and,
     if the first 4 bytes look like a plausible length prefix, that interpretation too."""
@@ -77,7 +73,7 @@ def lsb_candidates(image: Image.Image, max_bytes: int = MAX_LSB_BYTES) -> dict[s
     for channel in _channel_options(image.mode):
         for traversal in ("row", "column"):
             label = f"{channel}-{traversal}"
-            raw = _bytes_from_bits(extract_lsb_bits(array, channel, traversal), max_bytes)
+            raw = bits_to_bytes(extract_lsb_bits(array, channel, traversal), max_bytes)
             candidates[label] = raw
 
             if len(raw) >= 4:

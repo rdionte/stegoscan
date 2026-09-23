@@ -42,7 +42,7 @@ def format_report(report: Report, path: Path, file_type: str) -> str:
         "Findings:" if report.findings else "Findings: none",
     ]
     for finding in report.findings:
-        lines.append(f"  [{finding.severity.upper():<6}] {finding.check:<24} {finding.detail}")
+        lines.append(f"  [{finding.severity.upper():<6}] {finding.check:<30} {finding.detail}")
 
     if report.extracted:
         lines += [

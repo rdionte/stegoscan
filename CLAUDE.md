@@ -107,11 +107,14 @@ Each phase must have tests that confirm:
 JPEG DCT-domain stego (F5, OutGuess), audio/video stego, live packet capture, and sandboxing or detonating payloads.
 
 ## Status
-- [x] Phase 1: Images: detection engine + CLI + tests done (94 passing)
+- [x] Phase 1: Images: detection engine + CLI + tests done
   - Done: `report.py`, `signatures.py`, `make_samples.py`, `image_scan.py` (LSB multi-order, chi-square, RS, appended data, metadata, bit-planes, `scan_image()`)
   - CLI: `scanner.py` routes by magic bytes → extension; `__main__.py` exit codes 0 clean / 1 flagged / 2 error (incl. unreadable files). `--json` never contains raw payload bytes; `--extract` writes non-executable `.bin`
   - Chi-square/RS follow Fridrich, Goljan & Du (SPIE 2002). Stats only run on images >=128x128; RS threshold 10%, chi-square 5% (calibrated on synthetic covers)
-- [ ] Phase 2: Text
+- [x] Phase 2: Text: `text_scan.py` + samples (`samples/text/`) + tests done (128 passing total)
+  - Trailing whitespace decoded both ways; data-like check = >=8 mixed space/tab lines, >=4 distinct patterns, tab ratio 0.2-0.8
+  - Zero-width: all ordered char pairs tried; BOM at offset 0 and ZWJ/ZWNJ between emoji or Arabic/Indic letters are ignored as legitimate
+  - Scoring: payload/message/unexplained anomaly = high; an anomaly that decoded drops to info (no double count). Messages -> SUSPICIOUS, signature payloads -> LIKELY_PAYLOAD
 - [ ] Phase 3: Network
 - [ ] Web UI
 - [ ] README + portfolio write-up
