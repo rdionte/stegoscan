@@ -81,8 +81,7 @@ def _looks_like_text(head: bytes) -> bool:
 def scan_file(path: Path) -> Report:
     """Detect the file type and run the matching scanner.
 
-    Raises NotImplementedError for types whose phase isn't built yet,
-    and ValueError for unrecognized files.
+    Raises ValueError for unrecognized files.
     """
     file_type = detect_file_type(path)
     if file_type == IMAGE:
@@ -90,5 +89,7 @@ def scan_file(path: Path) -> Report:
     if file_type == TEXT:
         return scan_text(path)
     if file_type == PCAP:
-        raise NotImplementedError("Network (pcap) scanning arrives in Phase 3.")
+        # Imported here so image/text scans don't pay scapy's ~0.5 s import time.
+        from stegoscan.net_scan import scan_pcap
+        return scan_pcap(path)
     raise ValueError(f"Unrecognized file type: {path.name}")

@@ -79,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         file_type = detect_file_type(path)
         report = scan_file(path)
-    except (NotImplementedError, ValueError) as error:
+    except ValueError as error:
         print(f"stegoscan: error: {error}", file=sys.stderr)
         return EXIT_ERROR
 

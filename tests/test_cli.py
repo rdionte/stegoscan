@@ -10,11 +10,11 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from scripts.make_samples import PAYLOAD_MZ, generate_all, generate_text_samples
+from scripts.make_samples import PAYLOAD_MZ, generate_all, generate_pcap_samples, generate_text_samples
 from stegoscan.__main__ import EXIT_CLEAN, EXIT_ERROR, EXIT_FLAGGED, main
 from stegoscan.image_scan import scan_image
 from stegoscan.report import UNREADABLE_CHECK, hex_preview, is_unreadable, report_to_dict
-from stegoscan.scanner import IMAGE, PCAP, TEXT, UNKNOWN, detect_file_type
+from stegoscan.scanner import IMAGE, PCAP, TEXT, UNKNOWN, detect_file_type, scan_file
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -147,11 +147,28 @@ def test_binary_text_file_is_an_error(tmp_path, capsys):
     assert "could not analyze" in capsys.readouterr().err
 
 
-def test_pcap_not_supported_yet(tmp_path, capsys):
-    capture = tmp_path / "capture.pcap"
-    capture.write_bytes(b"\xd4\xc3\xb2\xa1" + b"\x00" * 20)
-    assert main(["scan", str(capture)]) == EXIT_ERROR
-    assert "Phase 3" in capsys.readouterr().err
+def test_pcap_payload_extracted_via_cli(tmp_path, capsys):
+    pcap_dir = tmp_path / "pcap"
+    generate_pcap_samples(pcap_dir)
+    out_dir = tmp_path / "out"
+    code = main(["scan", str(pcap_dir / "icmp_payload.pcap"), "--extract", str(out_dir)])
+    assert code == EXIT_FLAGGED
+    assert "(pcap)" in capsys.readouterr().out
+    (saved,) = out_dir.iterdir()
+    assert saved.read_bytes() == PAYLOAD_MZ
+    assert main(["scan", str(pcap_dir / "clean_mixed.pcap")]) == EXIT_CLEAN
+    assert main(["scan", str(pcap_dir / "corrupt.pcap")]) == EXIT_ERROR
+
+
+def test_image_scan_does_not_import_scapy(tmp_path):
+    images = tmp_path / "images"
+    generate_all(images)
+    code = (
+        "import sys; from pathlib import Path; from stegoscan.scanner import scan_file; "
+        f"scan_file(Path({str(images / 'clean_rgb.png')!r})); print('scapy' in sys.modules)"
+    )
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=PROJECT_ROOT)
+    assert result.stdout.strip() == "False"
 
 
 def test_unknown_type_is_an_error(tmp_path, capsys):
@@ -179,6 +196,13 @@ def test_report_dict_is_strict_json_for_every_sample(samples_dir):
     stray numpy type in evidence fails here instead of being silently stringified."""
     for sample in sorted(samples_dir.iterdir()):
         json.dumps(report_to_dict(scan_image(sample)))
+
+
+def test_report_dict_is_strict_json_for_text_and_pcap_samples(tmp_path):
+    generate_text_samples(tmp_path / "text")
+    generate_pcap_samples(tmp_path / "pcap")
+    for sample in sorted([*(tmp_path / "text").iterdir(), *(tmp_path / "pcap").iterdir()]):
+        json.dumps(report_to_dict(scan_file(sample)))
 
 
 # --- --extract ----------------------------------------------------------------

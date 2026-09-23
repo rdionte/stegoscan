@@ -7,12 +7,12 @@ import pytest
 
 from scripts.make_samples import HIDDEN_MESSAGE, PAYLOAD_MZ, generate_text_samples
 from stegoscan.bits import bits_to_bytes
+from stegoscan.decoding import looks_like_message
 from stegoscan.report import CLEAN, LIKELY_PAYLOAD, SUSPICIOUS, UNREADABLE_CHECK
 from stegoscan.text_scan import (
     decode_whitespace,
     decode_zero_width,
     find_zero_width,
-    looks_like_message,
     scan_text,
     trailing_whitespace,
     whitespace_stats_finding,

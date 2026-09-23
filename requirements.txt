@@ -1,6 +1,6 @@
 pillow>=10.0
 numpy>=1.26
 scipy>=1.11
-scapy>=2.5
+scapy>=2.6  # DNS questions as a list (qd[0])
 flask>=3.0
 pytest>=8.0

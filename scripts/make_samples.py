@@ -11,8 +11,14 @@ Also produces the Phase 2 (text) fixtures used to test text_scan.py:
 clean texts that contain legitimate whitespace and joiners (markdown line
 breaks, CRLF, tab indentation, emoji, Persian), trailing-whitespace and
 zero-width stego files, and edge cases (empty, binary).
+
+Also produces the Phase 3 (network) fixtures used to test net_scan.py:
+synthetic captures only, using documentation IP ranges (RFC 5737) and
+reserved .test / example.* names, with clean traffic and one covert
+channel per file. Nothing is ever sent on a real network.
 """
 
+import base64
 from pathlib import Path
 
 import numpy as np
@@ -20,10 +26,12 @@ from PIL import Image
 
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "samples" / "images"
 TEXT_OUTPUT_DIR = Path(__file__).resolve().parent.parent / "samples" / "text"
+PCAP_OUTPUT_DIR = Path(__file__).resolve().parent.parent / "samples" / "pcap"
 
 PAYLOAD_MZ = b"MZ" + b"STEGOSCAN TEST PAYLOAD - harmless"
 PAYLOAD_SHEBANG = b"#!/bin/sh\nSTEGOSCAN TEST PAYLOAD - harmless"
 HIDDEN_MESSAGE = b"STEGOSCAN HIDDEN MESSAGE - meet at the usual place"
+DNS_TUNNEL_PAYLOAD = PAYLOAD_MZ * 3  # long enough to need 10+ queries
 
 IMAGE_SIZE = (64, 64)  # (width, height)
 STATS_SIZE = (256, 256)  # statistical tests need more samples per value pair
@@ -321,11 +329,234 @@ def generate_text_samples(output_dir: Path) -> list[Path]:
     return written
 
 
+# --- Phase 3: network fixtures ---------------------------------------------------
+# RFC 5737 documentation addresses: never routable on the real internet.
+CLIENT, SERVER, RESOLVER = "192.0.2.10", "198.51.100.20", "203.0.113.53"
+COVERT_SRC, COVERT_DST = "192.0.2.66", "198.51.100.99"
+TUNNEL_DOMAIN = "tunnel.example.test"
+WINDOWS_PING = b"abcdefghijklmnopqrstuvwabcdefghi"
+_BASE_TIME = 1_700_000_000.0
+_BASE32_ALPHABET = list("abcdefghijklmnopqrstuvwxyz234567")
+
+
+def _linux_ping_payload(rng: np.random.Generator) -> bytes:
+    """56 bytes like Linux ping: a 16-byte timestamp, then byte i has value i."""
+    return rng.bytes(16) + bytes(range(16, 56))
+
+
+def make_clean_traffic(rng: np.random.Generator) -> list:
+    """Normal-looking traffic: HTTPS sessions, DNS lookups, and Linux/Windows pings.
+
+    Client IP IDs count up, the server uses ID 0 with DF set (Linux style),
+    ISNs are random, and each direction keeps a steady TTL.
+    """
+    from scapy.layers.dns import DNS, DNSQR, DNSRR
+    from scapy.layers.inet import ICMP, IP, TCP, UDP
+    from scapy.layers.l2 import Ether
+    from scapy.packet import Raw
+
+    packets = []
+    client_id = int(rng.integers(0, 60000))
+
+    def from_client(dst: str):
+        nonlocal client_id
+        client_id = (client_id + 1) % 65536
+        return Ether() / IP(src=CLIENT, dst=dst, id=client_id, ttl=64)
+
+    def from_server():
+        return Ether() / IP(src=SERVER, dst=CLIENT, id=0, flags="DF", ttl=57)
+
+    # HTTPS sessions: handshake, then encrypted-looking records both ways
+    for _ in range(6):
+        sport = int(rng.integers(40000, 60000))
+        c_seq, s_seq = int(rng.integers(0, 2**32)), int(rng.integers(0, 2**32))
+        packets.append(from_client(SERVER) / TCP(sport=sport, dport=443, flags="S", seq=c_seq))
+        packets.append(from_server() / TCP(sport=443, dport=sport, flags="SA", seq=s_seq, ack=(c_seq + 1) % 2**32))
+        c_seq, s_seq = (c_seq + 1) % 2**32, (s_seq + 1) % 2**32
+        packets.append(from_client(SERVER) / TCP(sport=sport, dport=443, flags="A", seq=c_seq, ack=s_seq))
+        for _ in range(20):
+            request = rng.bytes(int(rng.integers(40, 400)))
+            packets.append(from_client(SERVER) / TCP(sport=sport, dport=443, flags="PA", seq=c_seq, ack=s_seq) / Raw(request))
+            c_seq = (c_seq + len(request)) % 2**32
+            response = rng.bytes(int(rng.integers(100, 1400)))
+            packets.append(from_server() / TCP(sport=443, dport=sport, flags="PA", seq=s_seq, ack=c_seq) / Raw(response))
+            s_seq = (s_seq + len(response)) % 2**32
+
+    # DNS: ordinary names, a few hash-like CDN hosts, and one legitimate TXT lookup
+    names = ["www.example.com", "mail.example.com", "api.example.org", "cdn.example.net",
+             "static.example.com", "login.example.org", "updates.example.com", "news.example.net"]
+    names += ["".join(rng.choice(list("0123456789abcdef"), size=13)) + ".cdn.example.net" for _ in range(3)]
+    queries = [(str(name), "A") for name in rng.choice(names, size=19)] + [("_dmarc.example.com", "TXT")]
+    for name, qtype in queries:
+        sport, query_id = int(rng.integers(40000, 60000)), int(rng.integers(0, 65536))
+        packets.append(from_client(RESOLVER) / UDP(sport=sport, dport=53)
+                       / DNS(id=query_id, rd=1, qd=DNSQR(qname=name, qtype=qtype)))
+        answer = DNSRR(rrname=name, type="TXT", rdata="v=DMARC1; p=none") if qtype == "TXT" \
+            else DNSRR(rrname=name, type="A", rdata="198.51.100.30")
+        packets.append(Ether() / IP(src=RESOLVER, dst=CLIENT, id=int(rng.integers(0, 65536)), ttl=60)
+                       / UDP(sport=53, dport=sport)
+                       / DNS(id=query_id, qr=1, rd=1, ra=1, qd=DNSQR(qname=name, qtype=qtype), an=answer))
+
+    # Pings: Linux style to the server, Windows style to the resolver; replies echo the payload
+    for target, ttl, payloads in [
+        (SERVER, 57, [_linux_ping_payload(rng) for _ in range(8)]),
+        (RESOLVER, 60, [WINDOWS_PING] * 4),
+    ]:
+        ping_id = int(rng.integers(0, 65536))
+        for seq, payload in enumerate(payloads, start=1):
+            packets.append(from_client(target) / ICMP(type=8, id=ping_id, seq=seq) / Raw(payload))
+            packets.append(Ether() / IP(src=target, dst=CLIENT, id=int(rng.integers(0, 65536)), ttl=ttl)
+                           / ICMP(type=0, id=ping_id, seq=seq) / Raw(payload))
+    return packets
+
+
+def _covert_ip(rng: np.random.Generator, ip_id: int | None = None, ttl: int = 64):
+    from scapy.layers.inet import IP
+    from scapy.layers.l2 import Ether
+    ip_id = int(rng.integers(0, 65536)) if ip_id is None else ip_id
+    return Ether() / IP(src=COVERT_SRC, dst=COVERT_DST, id=ip_id, ttl=ttl)
+
+
+def covert_ip_id_packets(payload: bytes, rng: np.random.Generator) -> list:
+    """covert_tcp style: one byte per packet in the IP ID high byte (ID = byte * 256)."""
+    from scapy.layers.inet import TCP
+    return [_covert_ip(rng, ip_id=byte << 8)
+            / TCP(sport=int(rng.integers(1024, 65536)), dport=80, flags="S", seq=int(rng.integers(0, 2**32)))
+            for byte in payload]
+
+
+def covert_isn_packets(payload: bytes, rng: np.random.Generator) -> list:
+    """covert_tcp style: one byte per SYN in the top byte of the sequence number."""
+    from scapy.layers.inet import TCP
+    return [_covert_ip(rng) / TCP(sport=int(rng.integers(1024, 65536)), dport=80, flags="S", seq=byte << 24)
+            for byte in payload]
+
+
+def covert_reserved_bits_packets(payload: bytes, rng: np.random.Generator) -> list:
+    """3 payload bits per packet in the TCP reserved bits (zero-padded to a multiple of 3)."""
+    from scapy.layers.inet import TCP
+    from scapy.packet import Raw
+    bits = list(_bits_from_bytes(payload)) + [0] * (-len(payload) * 8 % 3)
+    # int(): scapy silently drops numpy integer types for this bit field
+    values = [int(bits[i] << 2 | bits[i + 1] << 1 | bits[i + 2]) for i in range(0, len(bits), 3)]
+    sport = int(rng.integers(1024, 65536))
+    return [_covert_ip(rng, ip_id=i + 1) / TCP(sport=sport, dport=80, flags="PA", reserved=value) / Raw(b"ok")
+            for i, value in enumerate(values)]
+
+
+def covert_urgent_pointer_packets(payload: bytes, rng: np.random.Generator) -> list:
+    """2 payload bytes per packet in the urgent pointer, with the URG flag NOT set."""
+    from scapy.layers.inet import TCP
+    from scapy.packet import Raw
+    padded = payload + b"\x00" * (len(payload) % 2)
+    sport = int(rng.integers(1024, 65536))
+    return [_covert_ip(rng, ip_id=i + 1)
+            / TCP(sport=sport, dport=80, flags="PA", urgptr=int.from_bytes(padded[i * 2 : i * 2 + 2], "big")) / Raw(b"ok")
+            for i in range(len(padded) // 2)]
+
+
+def covert_ttl_packets(payload: bytes, rng: np.random.Generator) -> list:
+    """One bit per packet: TTL 64 = 0, TTL 65 = 1."""
+    from scapy.layers.inet import UDP
+    return [_covert_ip(rng, ip_id=i + 1, ttl=64 + int(bit)) / UDP(sport=40000, dport=33434)
+            for i, bit in enumerate(_bits_from_bytes(payload))]
+
+
+def covert_dns_packets(labels: list[str], domain: str, qtype: str, rng: np.random.Generator) -> list:
+    """One query per label: <label>.<domain>, with a short answer."""
+    from scapy.layers.dns import DNS, DNSQR, DNSRR
+    from scapy.layers.inet import IP, UDP
+    from scapy.layers.l2 import Ether
+    packets = []
+    for i, label in enumerate(labels):
+        name = f"{label}.{domain}"
+        query_id = int(rng.integers(0, 65536))
+        packets.append(Ether() / IP(src=COVERT_SRC, dst=RESOLVER, id=i + 1, ttl=64) / UDP(sport=50000 + i, dport=53)
+                       / DNS(id=query_id, rd=1, qd=DNSQR(qname=name, qtype=qtype)))
+        answer = DNSRR(rrname=name, type="TXT", rdata="ok") if qtype == "TXT" else DNSRR(rrname=name, type="A", rdata="198.51.100.31")
+        packets.append(Ether() / IP(src=RESOLVER, dst=COVERT_SRC, id=int(rng.integers(0, 65536)), ttl=60)
+                       / UDP(sport=53, dport=50000 + i)
+                       / DNS(id=query_id, qr=1, rd=1, ra=1, qd=DNSQR(qname=name, qtype=qtype), an=answer))
+    return packets
+
+
+def covert_icmp_packets(payload: bytes, rng: np.random.Generator, chunk: int = 8) -> list:
+    """Payload split across echo requests; replies echo each chunk back."""
+    from scapy.layers.inet import ICMP, IP
+    from scapy.layers.l2 import Ether
+    from scapy.packet import Raw
+    packets, ping_id = [], int(rng.integers(0, 65536))
+    for seq, start in enumerate(range(0, len(payload), chunk), start=1):
+        data = payload[start : start + chunk]
+        packets.append(_covert_ip(rng, ip_id=seq) / ICMP(type=8, id=ping_id, seq=seq) / Raw(data))
+        packets.append(Ether() / IP(src=COVERT_DST, dst=COVERT_SRC, id=int(rng.integers(0, 65536)), ttl=64)
+                       / ICMP(type=0, id=ping_id, seq=seq) / Raw(data))
+    return packets
+
+
+def _base32_labels(data: bytes, size: int) -> list[str]:
+    encoded = base64.b32encode(data).decode().rstrip("=").lower()
+    return [encoded[i : i + size] for i in range(0, len(encoded), size)]
+
+
+def generate_pcap_samples(output_dir: Path) -> list[Path]:
+    """Generate every Phase 3 pcap fixture into output_dir. Returns the paths written."""
+    from scapy.layers.l2 import ARP, Ether
+    from scapy.utils import wrpcap
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    rng = np.random.default_rng(9012)
+    written: list[Path] = []
+
+    def save(name: str, packets: list) -> Path:
+        for i, packet in enumerate(packets):
+            packet.time = _BASE_TIME + i * 0.005
+        path = output_dir / name
+        wrpcap(str(path), packets, linktype=1)  # 1 = Ethernet
+        written.append(path)
+        return path
+
+    clean = make_clean_traffic(rng)
+    save("clean_mixed.pcap", clean)
+
+    # One covert channel per file (100%: the covert flow is all there is)
+    save("ipid_payload.pcap", covert_ip_id_packets(PAYLOAD_MZ, rng))
+    save("isn_payload.pcap", covert_isn_packets(PAYLOAD_MZ, rng))
+    save("tcp_reserved.pcap", covert_reserved_bits_packets(PAYLOAD_MZ, rng))
+    save("urgptr_payload.pcap", covert_urgent_pointer_packets(PAYLOAD_MZ, rng))
+    save("ttl_channel.pcap", covert_ttl_packets(HIDDEN_MESSAGE, rng))
+    save("dns_tunnel.pcap", covert_dns_packets(_base32_labels(DNS_TUNNEL_PAYLOAD, 16), TUNNEL_DOMAIN, "TXT", rng))
+    random_labels = ["".join(rng.choice(_BASE32_ALPHABET, size=16)) for _ in range(15)]
+    save("dns_random.pcap", covert_dns_packets(random_labels, "sync.example.test", "A", rng))
+    save("icmp_payload.pcap", covert_icmp_packets(PAYLOAD_MZ, rng))
+
+    # ~10%: a covert IP-ID flow hidden among normal traffic
+    covert = covert_ip_id_packets(PAYLOAD_MZ, rng)
+    step = len(clean) // len(covert)
+    mixed = list(clean)
+    for i, packet in enumerate(covert):
+        mixed.insert(i * (step + 1), packet)
+    save("mixed_10.pcap", mixed)
+
+    # Edge cases
+    (output_dir / "empty.pcap").write_bytes(b"")
+    written.append(output_dir / "empty.pcap")
+    save("header_only.pcap", [])
+    header = (output_dir / "header_only.pcap").read_bytes()
+    (output_dir / "corrupt.pcap").write_bytes(header + b"\xff" * 16 + b"garbage record")
+    written.append(output_dir / "corrupt.pcap")
+    save("arp_only.pcap", [Ether() / ARP(psrc=CLIENT, pdst=SERVER) for _ in range(10)])
+
+    return written
+
+
 def main() -> None:
     written = generate_all(OUTPUT_DIR)
     print(f"Wrote {len(written)} sample files to {OUTPUT_DIR}")
     written_text = generate_text_samples(TEXT_OUTPUT_DIR)
     print(f"Wrote {len(written_text)} sample files to {TEXT_OUTPUT_DIR}")
+    written_pcap = generate_pcap_samples(PCAP_OUTPUT_DIR)
+    print(f"Wrote {len(written_pcap)} sample files to {PCAP_OUTPUT_DIR}")
 
 
 if __name__ == "__main__":

@@ -21,8 +21,8 @@ from pathlib import Path
 import numpy as np
 
 from stegoscan.bits import bits_to_bytes
+from stegoscan.decoding import check_candidates, pick_best
 from stegoscan.report import UNREADABLE_CHECK, Finding, Report, build_report
-from stegoscan.signatures import find_signatures
 
 ZWSP, ZWNJ, ZWJ, BOM, WORD_JOINER = (chr(c) for c in (0x200B, 0x200C, 0x200D, 0xFEFF, 0x2060))
 ZERO_WIDTH_CHARS = (ZWSP, ZWNJ, ZWJ, BOM, WORD_JOINER)
@@ -37,8 +37,6 @@ MIN_DISTINCT_PATTERNS = 4
 TAB_RATIO_RANGE = (0.2, 0.8)
 
 MIN_ZERO_WIDTH = 8  # enough characters to carry one byte
-MIN_MESSAGE_BYTES = 4
-MESSAGE_PRINTABLE_RATIO = 0.9
 MAX_LOCATIONS = 10  # zero-width locations listed in evidence
 
 # Neighbors that make a joiner legitimate: emoji (ZWJ sequences like family
@@ -230,61 +228,6 @@ def zero_width_finding(hits: list[ZeroWidthHit], explained: bool) -> Finding | N
     )
 
 
-# --- Decoded content ------------------------------------------------------------
-
-def looks_like_message(data: bytes) -> bool:
-    """True if data is mostly printable ASCII (plus tab/newline) and long enough to mean something."""
-    if len(data) < MIN_MESSAGE_BYTES:
-        return False
-    values = np.frombuffer(data, dtype=np.uint8)
-    printable = ((values >= 32) & (values < 127)) | np.isin(values, (9, 10, 13))
-    return printable.mean() >= MESSAGE_PRINTABLE_RATIO
-
-
-@dataclass
-class _Decoded:
-    findings: list[Finding]
-    data: bytes | None = None
-    method: str | None = None
-    is_payload: bool = False
-
-
-def _check_candidates(candidates: dict[str, bytes], source: str, description: str) -> _Decoded:
-    """Signature-check each decoded candidate; keep the first payload, else the first message."""
-    result = _Decoded(findings=[])
-    message: tuple[str, bytes] | None = None
-
-    for label, data in candidates.items():
-        sig_findings = find_signatures(data)
-        for f in sig_findings:
-            result.findings.append(Finding(
-                f.check, f.severity, f"{f.detail} ({description}: {label})",
-                {**f.evidence, "encoding": label},
-            ))
-        if sig_findings and result.data is None:
-            result.data, result.method, result.is_payload = data, f"{source}:{label}", True
-        elif message is None and looks_like_message(data):
-            message = (label, data)
-
-    if result.data is not None:
-        result.findings.append(Finding(
-            f"{source}_payload_extracted", "high",
-            f"Extracted a {len(result.data)}-byte payload with a known signature from "
-            f"{description} ({result.method.split(':', 1)[1]}).",
-            {"encoding": result.method.split(":", 1)[1], "length": len(result.data)},
-        ))
-    elif message is not None:
-        label, data = message
-        preview = data[:60].decode("ascii", errors="replace")
-        result.data, result.method = data, f"{source}:{label}"
-        result.findings.append(Finding(
-            f"{source}_hidden_message", "high",
-            f"Decoded a {len(data)}-byte hidden text message from {description} ({label}): {preview!r}",
-            {"encoding": label, "length": len(data), "preview": preview},
-        ))
-    return result
-
-
 def scan_text(path: Path) -> Report:
     """Scan one text file and return a Report. Never raises on bad input."""
     text = read_text_safely(path)
@@ -298,11 +241,11 @@ def scan_text(path: Path) -> Report:
         return build_report([Finding("empty_file", "info", "File is empty: nothing to analyze.", {})])
 
     runs = trailing_whitespace(text)
-    whitespace = _check_candidates(decode_whitespace(runs), "whitespace", "trailing whitespace")
+    whitespace = check_candidates(decode_whitespace(runs), "whitespace", "trailing whitespace")
 
     hits = find_zero_width(text)
     suspicious_hits = [hit for hit in hits if not hit.legitimate]
-    zero_width = _check_candidates(decode_zero_width(suspicious_hits), "zero_width", "zero-width characters")
+    zero_width = check_candidates(decode_zero_width(suspicious_hits), "zero_width", "zero-width characters")
 
     findings = whitespace.findings + zero_width.findings
     for finding in (
@@ -312,11 +255,7 @@ def scan_text(path: Path) -> Report:
         if finding is not None:
             findings.append(finding)
 
-    # Prefer a signature payload over a plain message; whitespace before zero-width.
-    best = next(
-        (d for d in (whitespace, zero_width) if d.is_payload),
-        next((d for d in (whitespace, zero_width) if d.data is not None), None),
-    )
+    best = pick_best([whitespace, zero_width])  # whitespace wins ties
     if best is None:
         return build_report(findings)
     return build_report(findings, best.data, best.method)

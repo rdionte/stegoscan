@@ -42,8 +42,11 @@ pytest -v
 stegoscan/
   __init__.py
   __main__.py        # CLI entry (argparse)
-  report.py          # Finding + Report dataclasses, risk scoring
+  scanner.py         # detect file type (magic bytes -> extension) and route to a scanner
+  report.py          # Finding + Report dataclasses, risk scoring, JSON/hex helpers
   signatures.py      # payload signature checks (MZ, ELF, shebang, PowerShell, base64, ZIP)
+  bits.py            # shared bits -> bytes helper
+  decoding.py        # signature/message judging of decoded bytes (text + net)
   image_scan.py      # Phase 1
   text_scan.py       # Phase 2
   net_scan.py        # Phase 3
@@ -111,10 +114,14 @@ JPEG DCT-domain stego (F5, OutGuess), audio/video stego, live packet capture, an
   - Done: `report.py`, `signatures.py`, `make_samples.py`, `image_scan.py` (LSB multi-order, chi-square, RS, appended data, metadata, bit-planes, `scan_image()`)
   - CLI: `scanner.py` routes by magic bytes → extension; `__main__.py` exit codes 0 clean / 1 flagged / 2 error (incl. unreadable files). `--json` never contains raw payload bytes; `--extract` writes non-executable `.bin`
   - Chi-square/RS follow Fridrich, Goljan & Du (SPIE 2002). Stats only run on images >=128x128; RS threshold 10%, chi-square 5% (calibrated on synthetic covers)
-- [x] Phase 2: Text: `text_scan.py` + samples (`samples/text/`) + tests done (128 passing total)
+- [x] Phase 2: Text: `text_scan.py` + samples (`samples/text/`) + tests done
   - Trailing whitespace decoded both ways; data-like check = >=8 mixed space/tab lines, >=4 distinct patterns, tab ratio 0.2-0.8
   - Zero-width: all ordered char pairs tried; BOM at offset 0 and ZWJ/ZWNJ between emoji or Arabic/Indic letters are ignored as legitimate
   - Scoring: payload/message/unexplained anomaly = high; an anomaly that decoded drops to info (no double count). Messages -> SUSPICIOUS, signature payloads -> LIKELY_PAYLOAD
-- [ ] Phase 3: Network
+- [x] Phase 3: Network: `net_scan.py` + samples (`samples/pcap/`) + tests done (156 passing total)
+  - Checks: IP ID (constant/sequential/data_like/random), TCP ISN top byte, reserved bits, urgent pointer w/o URG, TTL switching, DNS tunneling (entropy + TXT ratio, base32/hex/base64url decode), ICMP non-standard/mismatched echo payloads
+  - `pcap_records_intact()` catches truncated captures (scapy silently returns a partial record). scapy is imported only when a pcap is scanned
+  - Known limits: base domain = last two labels (.co.uk wrong); IPv6 not analyzed; 1-16 byte ping payloads count as non-standard
+  - Shared decode/judging logic lives in `decoding.py` (used by text + net)
 - [ ] Web UI
 - [ ] README + portfolio write-up
