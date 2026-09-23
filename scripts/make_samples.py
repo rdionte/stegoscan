@@ -2,8 +2,9 @@
 
 Produces the Phase 1 (image) fixtures used to test image_scan.py:
 clean baselines, LSB-embedded stego images at 100% and ~10% embedding,
-appended-data samples, and edge cases (tiny, grayscale, alpha, empty,
-corrupt). See CLAUDE.md for the full plan. Payloads are fake signature
+appended-data samples, edge cases (tiny, grayscale, alpha, empty,
+corrupt), and larger stats_* images with random payload bits for the
+chi-square/RS tests. See CLAUDE.md for the full plan. Payloads are fake signature
 bytes only -- never real malware.
 """
 
@@ -18,14 +19,48 @@ PAYLOAD_MZ = b"MZ" + b"STEGOSCAN TEST PAYLOAD - harmless"
 PAYLOAD_SHEBANG = b"#!/bin/sh\nSTEGOSCAN TEST PAYLOAD - harmless"
 
 IMAGE_SIZE = (64, 64)  # (width, height)
+STATS_SIZE = (256, 256)  # statistical tests need more samples per value pair
 
 
 def make_clean_image(size: tuple[int, int], mode: str, rng: np.random.Generator) -> Image.Image:
-    """Build a base image of random pixel noise, with no hidden data."""
+    """Build a photo-like cover image with no hidden data.
+
+    Random noise is a bad cover: its value pairs are already balanced, so
+    chi-square/RS read it as ~100% embedded. Instead: upscale random 8x8
+    blobs (smooth regions), add light sensor-like noise, then contrast-stretch
+    (like a levels adjustment), which leaves the uneven pair counts real photos have.
+    """
     width, height = size
-    shape = (height, width) if mode == "L" else (height, width, len(mode))
-    array = rng.integers(0, 256, size=shape, dtype=np.uint8)
+    color_channels = 1 if mode == "L" else 3
+    low = rng.integers(0, 256, size=(8, 8, color_channels), dtype=np.uint8)
+    smooth = np.stack(
+        [np.array(Image.fromarray(low[:, :, c]).resize((width, height), Image.BICUBIC)) for c in range(color_channels)],
+        axis=-1,
+    ).astype(float)
+    noisy = np.clip(smooth + rng.normal(0, 1.5, smooth.shape), 0, 255)
+    array = np.clip(np.round(noisy * 0.6 + 40) * 1.5 - 60, 0, 255).astype(np.uint8)
+
+    if mode == "L":
+        array = array[:, :, 0]
+    elif mode == "RGBA":
+        alpha = np.full((height, width, 1), 255, dtype=np.uint8)
+        array = np.concatenate([array, alpha], axis=-1)
     return Image.fromarray(array, mode=mode)
+
+
+def embed_random_bits(array: np.ndarray, fraction: float, scattered: bool, rng: np.random.Generator) -> np.ndarray:
+    """Overwrite the LSBs of `fraction` of all values with random bits.
+
+    Random bits stand in for an encrypted payload: no signature to find, so
+    only the statistical tests can catch it. scattered=False uses the first N
+    values (what chi-square is built for); scattered=True uses random
+    positions (what RS is built for).
+    """
+    flat = array.reshape(-1).copy()
+    count = int(fraction * flat.size)
+    positions = rng.choice(flat.size, count, replace=False) if scattered else np.arange(count)
+    flat[positions] = (flat[positions] & 0xFE) | rng.integers(0, 2, count, dtype=np.uint8)
+    return flat.reshape(array.shape)
 
 
 def _bits_from_bytes(data: bytes) -> np.ndarray:
@@ -148,6 +183,17 @@ def generate_all(output_dir: Path) -> list[Path]:
 
     corrupt_path = save(make_clean_image(IMAGE_SIZE, "RGB", rng), "corrupt.png")
     corrupt_file(corrupt_path)
+
+    # Statistical-detection fixtures: random (signature-less) payload bits
+    save(make_clean_image(STATS_SIZE, "RGB", rng), "stats_clean.png")
+    for name, fraction, scattered in [
+        ("stats_sequential_40.png", 0.4, False),
+        ("stats_scattered_40.png", 0.4, True),
+        ("stats_scattered_10.png", 0.1, True),
+        ("stats_full.png", 1.0, True),
+    ]:
+        cover = np.array(make_clean_image(STATS_SIZE, "RGB", rng))
+        save(Image.fromarray(embed_random_bits(cover, fraction, scattered, rng), "RGB"), name)
 
     return written
 

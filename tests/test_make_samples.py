@@ -20,6 +20,8 @@ EXPECTED_FILES = {
     "stego_grayscale.png", "stego_alpha.png", "stego_row_order.png",
     "appended_png.png", "appended_jpeg.jpg",
     "empty.png", "corrupt.png",
+    "stats_clean.png", "stats_sequential_40.png", "stats_scattered_40.png",
+    "stats_scattered_10.png", "stats_full.png",
 }
 
 
