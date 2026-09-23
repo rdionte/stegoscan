@@ -6,13 +6,17 @@ tests all speak the same format.
 """
 
 import hashlib
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
 SEVERITY_WEIGHTS = {"info": 0, "low": 10, "medium": 25, "high": 50}
 
 CLEAN = "CLEAN"
 SUSPICIOUS = "SUSPICIOUS"
 LIKELY_PAYLOAD = "LIKELY_PAYLOAD"
+
+# Every scanner uses this check name when it cannot parse its input, so the
+# CLI/web can tell "could not analyze" apart from "analyzed and found nothing".
+UNREADABLE_CHECK = "unreadable_file"
 
 
 @dataclass
@@ -69,3 +73,33 @@ def build_report(
         extraction_method=extraction_method,
         extracted_sha256=extracted_sha256,
     )
+
+
+def is_unreadable(report: Report) -> bool:
+    """True if the scanner could not parse the file at all."""
+    return any(f.check == UNREADABLE_CHECK for f in report.findings)
+
+
+def hex_preview(data: bytes, length: int = 64) -> str:
+    """xxd-style hex + ASCII dump of the first `length` bytes (for display only)."""
+    lines = []
+    chunk = data[:length]
+    for offset in range(0, len(chunk), 16):
+        row = chunk[offset : offset + 16]
+        hex_left = " ".join(f"{b:02x}" for b in row[:8])
+        hex_right = " ".join(f"{b:02x}" for b in row[8:])
+        ascii_part = "".join(chr(b) if 32 <= b < 127 else "." for b in row)
+        lines.append(f"{offset:08x}  {hex_left:<23}  {hex_right:<23}  |{ascii_part}|")
+    if len(data) > length:
+        lines.append(f"... ({len(data) - length} more bytes)")
+    return "\n".join(lines)
+
+
+def report_to_dict(report: Report) -> dict:
+    """JSON-safe view of a Report. Raw extracted bytes are left out on purpose;
+    only the length, hash, and a hex preview are included."""
+    data = asdict(report)
+    extracted = data.pop("extracted")
+    data["extracted_length"] = len(extracted) if extracted else 0
+    data["extracted_preview"] = hex_preview(extracted) if extracted else None
+    return data

@@ -8,7 +8,7 @@ from scipy.stats import chi2
 
 from scripts.make_samples import PAYLOAD_MZ, PAYLOAD_SHEBANG, generate_all
 from stegoscan.image_scan import chi_square_p_value, rs_estimate, scan_image
-from stegoscan.report import CLEAN, LIKELY_PAYLOAD
+from stegoscan.report import CLEAN, LIKELY_PAYLOAD, UNREADABLE_CHECK
 
 
 @pytest.fixture(scope="module")
@@ -122,4 +122,4 @@ def test_payload_fixtures_are_likely_payload_and_extracted_exactly(samples_dir, 
 def test_unreadable_files_fail_gracefully(samples_dir, name):
     report = scan_image(samples_dir / name)
     assert report.verdict == CLEAN
-    assert "unreadable_file" in _checks(report)
+    assert UNREADABLE_CHECK in _checks(report)

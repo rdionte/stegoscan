@@ -107,8 +107,9 @@ Each phase must have tests that confirm:
 JPEG DCT-domain stego (F5, OutGuess), audio/video stego, live packet capture, and sandboxing or detonating payloads.
 
 ## Status
-- [ ] Phase 1: Images: detection engine + tests done (66 passing); CLI (`__main__.py`) still to do
+- [x] Phase 1: Images: detection engine + CLI + tests done (94 passing)
   - Done: `report.py`, `signatures.py`, `make_samples.py`, `image_scan.py` (LSB multi-order, chi-square, RS, appended data, metadata, bit-planes, `scan_image()`)
+  - CLI: `scanner.py` routes by magic bytes → extension; `__main__.py` exit codes 0 clean / 1 flagged / 2 error (incl. unreadable files). `--json` never contains raw payload bytes; `--extract` writes non-executable `.bin`
   - Chi-square/RS follow Fridrich, Goljan & Du (SPIE 2002). Stats only run on images >=128x128; RS threshold 10%, chi-square 5% (calibrated on synthetic covers)
 - [ ] Phase 2: Text
 - [ ] Phase 3: Network

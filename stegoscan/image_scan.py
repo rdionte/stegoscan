@@ -15,7 +15,7 @@ import numpy as np
 from PIL import Image
 from scipy.stats import chi2
 
-from stegoscan.report import Finding, Report, build_report
+from stegoscan.report import UNREADABLE_CHECK, Finding, Report, build_report
 from stegoscan.signatures import find_signatures
 
 MAX_LSB_BYTES = 4096
@@ -296,7 +296,7 @@ def scan_image(path: Path) -> Report:
     image = read_image_safely(path)
     if image is None:
         return build_report([Finding(
-            "unreadable_file", "low",
+            UNREADABLE_CHECK, "low",
             "File could not be analyzed: it is empty, corrupt, or not a supported image.",
             {"file": path.name},
         )])
